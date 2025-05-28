@@ -1,7 +1,6 @@
 package com.bus.reservation.controllers;
 
-import com.bus.reservation.dtos.BusSearchRequest;
-import com.bus.reservation.dtos.BusSearchResponse;
+import com.bus.reservation.dtos.*;
 import com.bus.reservation.service.UserDetailsImpl;
 import com.bus.reservation.service.UserService;
 import jakarta.validation.Valid;
@@ -9,10 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
@@ -28,5 +24,22 @@ public class UserController {
     public ResponseEntity<List<BusSearchResponse>> searchBuses(@Valid @RequestBody BusSearchRequest request, @AuthenticationPrincipal UserDetailsImpl userDetails) {
         List<BusSearchResponse> results = userService.searchScheduledBuses(request,  userDetails.getEmail());
         return ResponseEntity.ok(results);
+    }
+
+    @PreAuthorize("hasRole('USER')")
+    @GetMapping("/seat-layout")
+    public ResponseEntity<List<SeatViewResponse>> getSeatLayout(@RequestParam Long scheduleId) {
+        List<SeatViewResponse> seatLayout = userService.getSeatLayout(scheduleId);
+        return ResponseEntity.ok(seatLayout);
+    }
+
+    @PostMapping("/book-seat")
+    @PreAuthorize("hasRole('USER')")
+    public ResponseEntity<BookSeatResponse> bookSeat(
+            @RequestBody @Valid BookSeatRequest request,
+            @AuthenticationPrincipal UserDetailsImpl userDetails) {
+
+        BookSeatResponse response = userService.bookSeat(request, userDetails.getEmail());
+        return ResponseEntity.ok(response);
     }
 }

@@ -8,6 +8,8 @@ import com.bus.reservation.service.RouteService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+
 @Service
 @RequiredArgsConstructor
 public class RouteServiceImpl implements RouteService {
@@ -42,6 +44,25 @@ public class RouteServiceImpl implements RouteService {
             routeRepository.save(reverseRoute);
         }
         return savedRoute;
+    }
+
+    @Override
+    public List<Route> getAllRoutes() {
+        List<Route> routes = routeRepository.findAll();
+        if (routes.isEmpty()) {
+            throw new RuntimeException("No routes available");
+        }
+        return routes;
+    }
+
+    @Override
+    public List<String> getAllUniqueSources() {
+        return routeRepository.findDistinctSources();
+    }
+
+    @Override
+    public List<String> getAllUniqueDestinations() {
+        return routeRepository.findDistinctDestinations();
     }
 
 }

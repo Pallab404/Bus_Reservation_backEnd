@@ -8,19 +8,18 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
-@RequestMapping("api/operator/routes")
+@RequestMapping("api/routes")
 @RequiredArgsConstructor
 public class RouteController {
 
     private final RouteService routeService;
 
-    @PreAuthorize("hasRole('OPERATOR')")
+
     @PostMapping("/add")
     public ResponseEntity<?> addRoute(@Valid @RequestBody RouteRequest request) {
         try {
@@ -29,5 +28,21 @@ public class RouteController {
         } catch (RuntimeException ex) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Error: " + ex.getMessage());
         }
+    }
+
+    @GetMapping("/get-routes")
+    public ResponseEntity<List<Route>> getAllRoutes() {
+        List<Route> routes = routeService.getAllRoutes();
+        return ResponseEntity.ok(routes);
+    }
+
+    @GetMapping("/sources")
+    public ResponseEntity<List<String>> getAllSources() {
+        return ResponseEntity.ok(routeService.getAllUniqueSources());
+    }
+
+    @GetMapping("/destinations")
+    public ResponseEntity<List<String>> getAllDestinations() {
+        return ResponseEntity.ok(routeService.getAllUniqueDestinations());
     }
 }
