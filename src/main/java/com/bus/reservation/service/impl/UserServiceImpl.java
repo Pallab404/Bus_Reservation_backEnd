@@ -8,13 +8,16 @@ import com.bus.reservation.repository.*;
 import com.bus.reservation.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Service
@@ -100,122 +103,200 @@ public class UserServiceImpl implements UserService {
     @Override
     @Transactional
     public BookSeatResponse bookSeat(BookSeatRequest request, String email) {
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        log.info("Starting seat booking process for request: {}", request);
 
-        Schedule schedule = scheduleRepository.findById(request.getScheduleId())
-                .orElseThrow(() -> new ResourceNotFoundException("Schedule not found"));
+        try {
+            // 1. Validate user
+            User user = userRepository.findByEmail(email)
+                    .orElseThrow(() -> {
+                        log.error("User not found with email: {}", email);
+                        return new ResourceNotFoundException("Operator not found");
+                    });
+            log.debug("Found user: {}", user.getId());
 
-        if (!schedule.getIsActive() || !"Scheduled".equalsIgnoreCase(schedule.getStatus().name())) {
-            throw new BadRequestException("This journey is not bookable");
-        }
+            // 2. Validate schedule
+            Schedule schedule = scheduleRepository.findById(request.getScheduleId())
+                    .orElseThrow(() -> {
+                        log.error("Schedule not found with ID: {}", request.getScheduleId());
+                        return new ResourceNotFoundException("Schedule not found");
+                    });
+            log.debug("Found schedule: {} (Status: {})", schedule.getId(), schedule.getStatus());
 
-        List<String> seatNumbers = request.getSeatNumbers();
-        List<PassengerRequest> passengers = request.getPassengers();
-
-        if (seatNumbers == null || passengers == null || seatNumbers.isEmpty()) {
-            throw new BadRequestException("Seats and passengers must be provided");
-        }
-
-        if (seatNumbers.size() > 6) {
-            throw new BadRequestException("Cannot book more than 6 seats");
-        }
-
-        if (seatNumbers.size() != passengers.size()) {
-            throw new BadRequestException("Number of seats and passengers must match");
-        }
-
-        Bus bus = schedule.getBus();
-        List<Seat> busSeats = seatRepository.findByBusId(bus.getId());
-
-        Map<String, Seat> seatMap = new HashMap<>();
-        for (Seat seat : busSeats) {
-            seatMap.put(seat.getSeatNumber(), seat);
-        }
-
-        List<SeatInventory> inventoriesToBook = new ArrayList<>();
-        for (String seatNo : seatNumbers) {
-            Seat seat = seatMap.get(seatNo);
-            if (seat == null) {
-                throw new BadRequestException("Invalid seat number: " + seatNo);
+            // 3. Check schedule availability
+            if (!schedule.getIsActive() || !"Scheduled".equalsIgnoreCase(schedule.getStatus().name())) {
+                log.warn("Schedule {} is not bookable. Active: {}, Status: {}",
+                        schedule.getId(), schedule.getIsActive(), schedule.getStatus());
+                throw new BadRequestException("This journey is not bookable");
             }
 
-            SeatInventory inventory = seatInventoryRepository
-                    .findByScheduleIdAndSeatId(schedule.getId(), seat.getId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Seat inventory not found for seat: " + seatNo));
+            // 4. Validate seats and passengers
+            List<String> seatNumbers = request.getSeatNumbers();
+            List<PassengerRequest> passengers = request.getPassengers();
 
-            if (inventory.getIsBooked()) {
-                throw new BadRequestException("Seat already booked: " + seatNo);
+            if (seatNumbers == null || passengers == null || seatNumbers.isEmpty()) {
+                log.error("Invalid seat/passenger data - Seats: {}, Passengers: {}", seatNumbers, passengers);
+                throw new BadRequestException("Seats and passengers must be provided");
             }
 
-            inventoriesToBook.add(inventory);
-        }
+            if (seatNumbers.size() > 6) {
+                log.error("Too many seats requested: {}", seatNumbers.size());
+                throw new BadRequestException("Cannot book more than 6 seats");
+            }
 
-        Booking booking = Booking.builder()
-                .user(user)
-                .schedule(schedule)
-                .bookingTime(LocalDateTime.now())
-                .bookingStatus(Booking.BookingStatus.CONFIRMED)
-                .totalAmount(0.0)
-                .paymentStatus(Booking.PaymentStatus.PENDING)
-                .build();
-        booking = bookingRepository.save(booking);
+            if (seatNumbers.size() != passengers.size()) {
+                log.error("Seat-passenger mismatch. Seats: {}, Passengers: {}", seatNumbers.size(), passengers.size());
+                throw new BadRequestException("Number of seats and passengers must match");
+            }
 
-        List<BookingDetail> bookingDetails = new ArrayList<>();
-        double totalFare = 0.0;
+            // 5. Get bus and seats
+            Bus bus = schedule.getBus();
+            if (bus == null) {
+                log.error("No bus assigned to schedule {}", schedule.getId());
+                throw new IllegalStateException("No bus assigned to this schedule");
+            }
+            log.debug("Processing bus: {}", bus.getId());
 
-        for (int i = 0; i < inventoriesToBook.size(); i++) {
-            SeatInventory inventory = inventoriesToBook.get(i);
-            PassengerRequest passenger = passengers.get(i);
+            List<Seat> busSeats = seatRepository.findByBusId(bus.getId());
+            if (busSeats.isEmpty()) {
+                log.error("No seats found for bus {}", bus.getId());
+                throw new ResourceNotFoundException("No seats configured for this bus");
+            }
 
-            inventory.setIsBooked(true);
-            seatInventoryRepository.save(inventory);
+            // 6. Prepare seat inventory
+            Map<String, Seat> seatMap = busSeats.stream()
+                    .collect(Collectors.toMap(Seat::getSeatNumber, Function.identity()));
 
-            totalFare += inventory.getSeatFare();
+            List<SeatInventory> inventoriesToBook = new ArrayList<>();
+            for (String seatNo : seatNumbers) {
+                try {
+                    Seat seat = seatMap.get(seatNo);
+                    if (seat == null) {
+                        log.error("Invalid seat number: {}", seatNo);
+                        throw new BadRequestException("Invalid seat number: " + seatNo);
+                    }
 
-            BookingDetail detail = BookingDetail.builder()
-                    .booking(booking)
-                    .seatInventory(inventory)
-                    .passengerName(passenger.getName())
-                    .passengerAge(passenger.getAge())
-                    .gender(passenger.getGender())
+                    SeatInventory inventory = seatInventoryRepository
+                            .findByScheduleIdAndSeatId(schedule.getId(), seat.getId())
+                            .orElseThrow(() -> {
+                                log.error("Inventory missing for seat {} on schedule {}", seatNo, schedule.getId());
+                                return new ResourceNotFoundException("Seat inventory not found for seat: " + seatNo);
+                            });
+
+                    if (inventory.getIsBooked()) {
+                        log.warn("Seat already booked: {}", seatNo);
+                        throw new BadRequestException("Seat already booked: " + seatNo);
+                    }
+
+                    inventoriesToBook.add(inventory);
+                } catch (Exception e) {
+                    log.error("Failed processing seat {}: {}", seatNo, e.getMessage());
+                    throw e;
+                }
+            }
+
+            // 7. Create booking
+            Booking booking = Booking.builder()
+                    .user(user)
+                    .schedule(schedule)
+                    .bookingTime(LocalDateTime.now())
+                    .bookingStatus(Booking.BookingStatus.CONFIRMED)
+                    .totalAmount(0.0)
+                    .paymentStatus(Booking.PaymentStatus.PENDING)
                     .build();
 
-            bookingDetails.add(detail);
+            try {
+                booking = bookingRepository.save(booking);
+                log.debug("Created booking: {}", booking.getId());
+            } catch (Exception e) {
+                log.error("Failed to save booking: {}", e.getMessage());
+                throw new RuntimeException("Failed to create booking record", e);
+            }
+
+            // 8. Process booking details
+            List<BookingDetail> bookingDetails = new ArrayList<>();
+            double totalFare = 0.0;
+
+            for (int i = 0; i < inventoriesToBook.size(); i++) {
+                try {
+                    SeatInventory inventory = inventoriesToBook.get(i);
+                    PassengerRequest passenger = passengers.get(i);
+
+                    inventory.setIsBooked(true);
+                    seatInventoryRepository.save(inventory);
+
+                    totalFare += inventory.getSeatFare();
+
+                    BookingDetail detail = BookingDetail.builder()
+                            .booking(booking)
+                            .seatInventory(inventory)
+                            .passengerName(passenger.getName())
+                            .passengerAge(passenger.getAge())
+                            .gender(passenger.getGender())
+                            .build();
+
+                    bookingDetails.add(detail);
+                } catch (Exception e) {
+                    log.error("Failed processing passenger {}: {}", i, e.getMessage());
+                    throw new RuntimeException("Failed to process passenger " + i, e);
+                }
+            }
+
+            try {
+                bookingDetailRepository.saveAll(bookingDetails);
+                log.debug("Saved {} booking details", bookingDetails.size());
+            } catch (Exception e) {
+                log.error("Failed to save booking details: {}", e.getMessage());
+                throw new RuntimeException("Failed to save booking details", e);
+            }
+
+            // 9. Process payment
+            Payment payment = Payment.builder()
+                    .booking(booking)
+                    .paymentMethod(request.getPaymentMethod())
+                    .transactionId(UUID.randomUUID().toString())
+                    .amount(totalFare)
+                    .paymentTime(LocalDateTime.now())
+                    .paymentStatus(Booking.PaymentStatus.PAID)
+                    .build();
+
+            try {
+                paymentRepository.save(payment);
+                log.debug("Processed payment: {}", payment.getTransactionId());
+            } catch (Exception e) {
+                log.error("Payment failed: {}", e.getMessage());
+                throw new RuntimeException("Payment processing failed", e);
+            }
+
+            // 10. Finalize booking
+            booking.setTotalAmount(totalFare);
+            booking.setPaymentStatus(Booking.PaymentStatus.PAID);
+            bookingRepository.save(booking);
+
+            // 11. Update schedule
+            schedule.setAvailableSeats(schedule.getAvailableSeats() - seatNumbers.size());
+            scheduleRepository.save(schedule);
+
+            log.info("Booking completed successfully. Booking ID: {}", booking.getId());
+
+            return BookSeatResponse.builder()
+                    .bookingId(booking.getId())
+                    .bookedSeats(seatNumbers)
+                    .totalAmount(totalFare)
+                    .bookingStatus("CONFIRMED")
+                    .paymentStatus("PAID")
+                    .bookingTime(booking.getBookingTime())
+                    .message("Booking successful")
+                    .build();
+
+        } catch (Exception e) {
+            log.error("CRITICAL ERROR IN BOOKING PROCESS: ", e);
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Booking failed: " + e.getMessage(),
+                    e
+            );
         }
-        bookingDetailRepository.saveAll(bookingDetails);
-
-        Payment payment = Payment.builder()
-                .booking(booking)
-                .paymentMethod(request.getPaymentMethod())
-                .transactionId(UUID.randomUUID().toString())
-                .amount(totalFare)
-                .paymentTime(LocalDateTime.now())
-                .paymentStatus(Booking.PaymentStatus.PAID)
-                .build();
-        paymentRepository.save(payment);
-
-        // Update booking with final fare
-        booking.setTotalAmount(totalFare);
-        booking.setPaymentStatus(Booking.PaymentStatus.PAID);
-        bookingRepository.save(booking);
-
-        // Update schedule seat availability
-        schedule.setAvailableSeats(schedule.getAvailableSeats() - seatNumbers.size());
-        scheduleRepository.save(schedule);
-
-        // Build response
-        return BookSeatResponse.builder()
-                .bookingId(booking.getId())
-                .bookedSeats(seatNumbers)
-                .totalAmount(totalFare)
-                .bookingStatus("CONFIRMED")
-                .paymentStatus("PAID")
-                .bookingTime(booking.getBookingTime())
-                .message("Booking successful")
-                .build();
     }
-
     @Override
     public List<BookingCardResponse> getMyBookings(String email) {
         User user = userRepository.findByEmail(email)

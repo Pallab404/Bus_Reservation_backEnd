@@ -40,4 +40,12 @@ public class SeatInventory {
     @JsonIgnore
     private BookingDetail bookingDetail;
 
+    @PrePersist
+    @PreUpdate
+    private void validateFare() {
+        if (this.seatFare == null && this.schedule != null) {
+            this.seatFare = this.schedule.getFare();
+        }
+    }
+
 }
