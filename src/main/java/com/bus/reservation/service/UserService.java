@@ -10,4 +10,8 @@ public interface UserService {
     List<SeatViewResponse> getSeatLayout(Long scheduleId);
 
     BookSeatResponse bookSeat(BookSeatRequest request, String email);
+
+    List<BookingCardResponse> getMyBookings(String email);
+
+    void cancelBooking(Long bookingId, String email);
 }

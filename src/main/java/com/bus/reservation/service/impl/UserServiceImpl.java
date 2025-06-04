@@ -11,7 +11,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -99,7 +101,7 @@ public class UserServiceImpl implements UserService {
     @Transactional
     public BookSeatResponse bookSeat(BookSeatRequest request, String email) {
         User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new ResourceNotFoundException("Operator not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
         Schedule schedule = scheduleRepository.findById(request.getScheduleId())
                 .orElseThrow(() -> new ResourceNotFoundException("Schedule not found"));
@@ -212,5 +214,120 @@ public class UserServiceImpl implements UserService {
                 .bookingTime(booking.getBookingTime())
                 .message("Booking successful")
                 .build();
+    }
+
+    @Override
+    public List<BookingCardResponse> getMyBookings(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
+        List<Booking> bookings = bookingRepository.findByUserId(user.getId());
+
+        List<BookingCardResponse> responses = new ArrayList<>();
+
+        for (Booking booking : bookings) {
+            Schedule schedule = booking.getSchedule();
+            Route route = schedule.getRoute();
+            Bus bus = schedule.getBus();
+
+            LocalDate journeyDate = schedule.getJourneyDate();
+            LocalTime departure = schedule.getDepartureTime();
+            LocalTime arrival = schedule.getArrivalTime();
+
+            String bookingStatus;
+            boolean isCancelable = false;
+
+            if ("CANCELLED".equalsIgnoreCase(booking.getBookingStatus().name())) {
+                bookingStatus = "CANCELLED";
+            } else if (LocalDate.now().isAfter(journeyDate) ||
+                    (LocalDate.now().isEqual(journeyDate) && LocalTime.now().isAfter(arrival))) {
+                bookingStatus = "COMPLETED";
+            } else {
+                bookingStatus = "CONFIRMED";
+
+                // Check if cancellation is allowed
+                LocalDate today = LocalDate.now();
+                if (journeyDate.isAfter(today) ||
+                        (journeyDate.isEqual(today) && departure.minusHours(5).isAfter(LocalTime.now()))) {
+                    isCancelable = true;
+                }
+            }
+            List<BookingDetail> bookingDetails = bookingDetailRepository.findByBookingId(booking.getId());
+
+            List<PassengerInfo> passengerInfos = bookingDetails.stream().map(detail -> {
+                SeatInventory inventory = detail.getSeatInventory();
+                Seat seat = inventory.getSeat();
+
+                return PassengerInfo.builder()
+                        .seatNumber(seat.getSeatNumber())
+                        .name(detail.getPassengerName())
+                        .age(detail.getPassengerAge())
+                        .gender(detail.getGender())
+                        .build();
+            }).toList();
+
+            responses.add(BookingCardResponse.builder()
+                    .bookingId(booking.getId())
+                    .busName(bus.getBusName())
+                    .busNumber(bus.getBusNumber())
+                    .source(route.getSource())
+                    .destination(route.getDestination())
+                    .journeyDate(journeyDate)
+                    .departureTime(departure)
+                    .arrivalTime(arrival)
+                    .bookingStatus(bookingStatus)
+                    .isCancelable(isCancelable)
+                    .passengers(passengerInfos)
+                    .build());
+        }
+
+        return responses;
+    }
+
+    @Override
+    @Transactional
+    public void cancelBooking(Long bookingId, String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
+        Booking booking = bookingRepository.findById(bookingId)
+                .orElseThrow(() -> new ResourceNotFoundException("Booking not found"));
+
+        if (!booking.getUser().getId().equals(user.getId())) {
+                throw new BadRequestException("Unauthorized to cancel this booking");
+        }
+
+        if (!booking.getBookingStatus().equals(Booking.BookingStatus.CONFIRMED)) {
+                throw new BadRequestException("Booking is not in a cancellable state");
+        }
+
+        Schedule schedule = booking.getSchedule();
+        LocalDateTime departure = LocalDateTime.of(schedule.getJourneyDate(), schedule.getDepartureTime());
+
+        if (departure.isBefore(LocalDateTime.now().plusHours(5))) {
+                throw new BadRequestException("Cancellation not allowed within 5 hours of departure");
+        }
+
+        // Update booking and payment
+        booking.setBookingStatus(Booking.BookingStatus.CANCELLED);
+        booking.setPaymentStatus(Booking.PaymentStatus.REFUNDED);
+        bookingRepository.save(booking);
+
+        // Release seats and update inventory
+        List<BookingDetail> details = bookingDetailRepository.findByBookingId(bookingId);
+        int releasedSeats = 0;
+
+        for (BookingDetail detail : details) {
+            SeatInventory inventory = detail.getSeatInventory();
+            if (inventory.getIsBooked()) {
+                inventory.setIsBooked(false);
+                seatInventoryRepository.save(inventory);
+                releasedSeats++;
+                }
+            }
+
+        // Update available seats
+        schedule.setAvailableSeats(schedule.getAvailableSeats() + releasedSeats);
+        scheduleRepository.save(schedule);
     }
 }

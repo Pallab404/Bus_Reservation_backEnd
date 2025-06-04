@@ -42,4 +42,23 @@ public class UserController {
         BookSeatResponse response = userService.bookSeat(request, userDetails.getEmail());
         return ResponseEntity.ok(response);
     }
+
+    @PreAuthorize("hasRole('USER')")
+    @GetMapping("/my-reservations")
+    public ResponseEntity<List<BookingCardResponse>> getMyReservations(@AuthenticationPrincipal UserDetailsImpl userDetails) {
+
+        List<BookingCardResponse> reservations = userService.getMyBookings(userDetails.getEmail());
+        return ResponseEntity.ok(reservations);
+    }
+
+    @PreAuthorize("hasRole('USER')")
+    @PutMapping("/cancel-booking/{bookingId}")
+    public ResponseEntity<String> cancelBooking(
+            @PathVariable Long bookingId,
+            @AuthenticationPrincipal UserDetailsImpl userDetails) {
+
+        userService.cancelBooking(bookingId, userDetails.getEmail());
+        return ResponseEntity.ok("Booking cancelled successfully");
+    }
+
 }

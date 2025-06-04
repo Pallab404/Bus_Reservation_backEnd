@@ -7,6 +7,7 @@ import lombok.Data;
 @Builder
 public class BusSummaryResponse {
     private Long id;
+    private String busName;
     private String busNumber;
     private String busType;
     private int totalSeats;

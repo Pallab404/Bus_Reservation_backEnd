@@ -81,6 +81,7 @@ public class BusServiceImpl implements BusService {
             boolean scheduled = scheduleRepository.existsByBusId(bus.getId());
             return BusSummaryResponse.builder()
                     .id(bus.getId())
+                    .busName(bus.getBusName())
                     .busNumber(bus.getBusNumber())
                     .busType(bus.getBusType())
                     .totalSeats(bus.getTotalSeats())
