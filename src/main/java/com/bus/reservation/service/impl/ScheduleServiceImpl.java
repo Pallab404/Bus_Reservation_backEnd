@@ -129,6 +129,7 @@ public class ScheduleServiceImpl implements ScheduleService {
         }
     }
 
+    @Transactional
     @Override
     public void cancelSchedule(Long scheduleId, String operatorEmail) {
         User operator = userRepository.findByEmail(operatorEmail)
