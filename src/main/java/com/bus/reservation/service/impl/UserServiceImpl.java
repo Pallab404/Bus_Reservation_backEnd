@@ -5,6 +5,7 @@ import com.bus.reservation.exception.BadRequestException;
 import com.bus.reservation.exception.ResourceNotFoundException;
 import com.bus.reservation.models.*;
 import com.bus.reservation.repository.*;
+import com.bus.reservation.service.EmailService;
 import com.bus.reservation.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,6 +34,9 @@ public class UserServiceImpl implements UserService {
     private final BookingRepository bookingRepository;
     private final BookingDetailRepository bookingDetailRepository;
     private final PaymentRepository paymentRepository;
+
+    private final EmailService emailService;
+
 
     @Override
     public List<BusSearchResponse> searchScheduledBuses(BusSearchRequest request, String userEmail) {
@@ -110,7 +114,7 @@ public class UserServiceImpl implements UserService {
             User user = userRepository.findByEmail(email)
                     .orElseThrow(() -> {
                         log.error("User not found with email: {}", email);
-                        return new ResourceNotFoundException("Operator not found");
+                        return new ResourceNotFoundException("User not found");
                     });
             log.debug("Found user: {}", user.getId());
 
@@ -275,6 +279,13 @@ public class UserServiceImpl implements UserService {
             // 11. Update schedule
             schedule.setAvailableSeats(schedule.getAvailableSeats() - seatNumbers.size());
             scheduleRepository.save(schedule);
+
+            try {
+                emailService.sendBookingConfirmation(user, booking, bookingDetails);
+                log.info("Confirmation email sent to {}", user.getEmail());
+            } catch (Exception e) {
+                log.warn("Failed to send confirmation email: {}", e.getMessage());
+            }
 
             log.info("Booking completed successfully. Booking ID: {}", booking.getId());
 
